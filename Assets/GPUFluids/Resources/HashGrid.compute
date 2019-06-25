@@ -1,0 +1,107 @@
+#pragma kernel ClearCell
+#pragma kernel ComputeHash
+#pragma kernel ReorderDataAndFindCellStart
+
+#include "ParticleDataType.cginc"
+#define BLOCK_SIZE 512
+
+StructuredBuffer<SimulationParameters> parameters;
+StructuredBuffer<float4> pos_press;
+StructuredBuffer<float4> vel_rho;
+StructuredBuffer<float4> force_vol;
+StructuredBuffer<float4> tgrm;
+RWStructuredBuffer<float4> pos_press_rw;
+RWStructuredBuffer<float4> vel_rho_rw;
+RWStructuredBuffer<float4> force_vol_rw;
+RWStructuredBuffer<float4> tgrm_rw;
+StructuredBuffer<SortData> sort_data;
+RWStructuredBuffer<SortData> sort_data_rw;
+RWStructuredBuffer<Cell> cells_rw;
+
+int3 ComputeGridPos(float4 p)
+{
+    int3 grid_pos;
+    float3 world_origin = parameters[0].worldOrigin;
+    float3 cell_size = parameters[0].cellSize;
+
+    grid_pos.x = floor((p.x - world_origin.x) / cell_size.x);
+    grid_pos.y = floor((p.y - world_origin.y) / cell_size.y);
+    grid_pos.z = floor((p.z - world_origin.z) / cell_size.z);
+
+    return grid_pos;
+}
+
+uint ComputeGridHash(int3 grid_pos)
+{
+    uint3 grid_size = parameters[0].gridSize;
+    grid_pos.x = grid_pos.x & (grid_size.x - 1);
+    grid_pos.y = grid_pos.y & (grid_size.y - 1);
+    grid_pos.z = grid_pos.z & (grid_size.z - 1);
+
+    return grid_pos.z * (grid_size.y * grid_size.x) + grid_pos.y * grid_size.x + grid_pos.x;
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ClearCell(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+
+    cells_rw[index].begin = 0xffffffff;
+    cells_rw[index].end = 0;
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ComputeHash(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+
+    if(index < parameters[0].numParticles) 
+    {
+        float4 ppos = pos_press[index];
+        // Get index of grid
+        int3 grid_pos = ComputeGridPos(ppos);
+        // Calculate hash
+        uint hash = ComputeGridHash(grid_pos);
+
+        sort_data_rw[index].key = hash;
+        sort_data_rw[index].index = index;
+    } else 
+    {
+        sort_data_rw[index].key = parameters[0].numCells;
+        sort_data_rw[index].index = index;
+    }
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ReorderDataAndFindCellStart(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+    
+    // Reorder data
+    SortData ki = sort_data[index];
+    pos_press_rw[index] = pos_press[ki.index];
+    vel_rho_rw[index] = vel_rho[ki.index];
+    force_vol_rw[index] = force_vol[ki.index];
+    tgrm_rw[index] = tgrm[ki.index];
+
+    // Compute cell
+    uint prev_index = (index == 0) ? (uint) parameters[0].numParticles : index;
+    prev_index--;
+
+    uint next_index = index + 1;
+    if(next_index == (uint) parameters[0].numParticles) { next_index = 0; }
+
+    uint key = ki.key;
+    uint prev_key = sort_data[prev_index].key;
+    uint next_key = sort_data[next_index].key;
+
+    if(key != prev_key)
+    {
+        cells_rw[key].begin = index;
+    }
+
+    if(key != next_key)
+    {
+        cells_rw[key].end = index + 1;
+    }
+}

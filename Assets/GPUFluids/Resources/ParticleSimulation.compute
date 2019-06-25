@@ -1,0 +1,441 @@
+#pragma kernel AddParticles
+#pragma kernel ComputeWeightedVolume
+#pragma kernel ComputeDensityPressureWCSPH
+#pragma kernel ComputeForceWCSPH
+#pragma kernel ComputeForceBoundary
+#pragma kernel Integration
+
+#include "ParticleDataType.cginc"
+#include "Collision.cginc"
+#include "Kernel.cginc"
+#define BLOCK_SIZE 512
+#define PI 3.141592653589793238462
+
+struct ForceData
+{
+    uint index;
+    float force;
+};
+
+StructuredBuffer<SimulationParameters> parameters;
+RWStructuredBuffer<float4> pos_press;
+RWStructuredBuffer<float4> vel_rho;
+RWStructuredBuffer<float4> force_vol;
+RWStructuredBuffer<float4> tgrm;
+
+RWStructuredBuffer<float4> vel_verlet;
+
+RWStructuredBuffer<float4> pos_press_dest;
+RWStructuredBuffer<float4> vel_rho_dest;
+RWStructuredBuffer<float4> force_vol_dest;
+RWStructuredBuffer<float4> tgrm_dest;
+
+StructuredBuffer<float4> add_pos_press;
+StructuredBuffer<float4> add_vel_rho;
+StructuredBuffer<float4> add_force_vol;
+StructuredBuffer<float4> add_tgrm;
+
+// Colliders
+StructuredBuffer<SphereCollider> sphere_colliders;
+StructuredBuffer<CapsuleCollider> capsule_colliders;
+StructuredBuffer<BoxCollider> box_colliders;
+
+StructuredBuffer<SortData> sort_data;
+StructuredBuffer<Cell> cells;
+
+// Additional elements
+int num_additional_particles;
+
+int3 ComputeGridPos(float3 p)
+{
+    int3 gridPos;
+    float3 worldOrigin = parameters[0].worldOrigin;
+    float3 cellSize = parameters[0].cellSize;
+
+    gridPos.x = floor((p.x - worldOrigin.x) / cellSize.x);
+    gridPos.y = floor((p.y - worldOrigin.y) / cellSize.y);
+    gridPos.z = floor((p.z - worldOrigin.z) / cellSize.z);
+
+    return gridPos;
+}
+
+uint ComputeGridHash(int3 gridPos)
+{
+    uint3 gridSize = parameters[0].gridSize;
+    gridPos.x = gridPos.x & (gridSize.x - 1);
+    gridPos.y = gridPos.y & (gridSize.y - 1);
+    gridPos.z = gridPos.z & (gridSize.z - 1);
+
+    return gridPos.z * (gridSize.y * gridSize.x) + gridPos.y * gridSize.x + gridPos.x;
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void AddParticles(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+    uint targetIndex = parameters[0].numParticles + index;
+
+    if(index < (uint) num_additional_particles && targetIndex < parameters[0].maxParticles)
+    {
+        pos_press[targetIndex] = add_pos_press[index];
+        vel_rho[targetIndex] = add_vel_rho[index];
+        force_vol[targetIndex] = add_force_vol[index];
+        tgrm[targetIndex] = add_tgrm[index];
+    }
+
+    AllMemoryBarrier();
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ComputeWeightedVolume(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+    if(index >= parameters[0].numParticles) return;
+
+    float3 currPos = pos_press[index].xyz;
+    float4 currTgrm = tgrm[index];
+    int currType = (int) currTgrm.x;
+
+    int3 currGridPos = ComputeGridPos(currPos);
+
+    float vol = 0.0f;
+
+    if(currType == 0) // fluid
+    {
+        force_vol[index].w = currTgrm.w / parameters[0].restDensity;
+    } else
+    {
+        // constants
+        float h = parameters[0].smoothingLength;
+        float invH = parameters[0].invSmoothingLength;
+        float coeffWeightedVolume = parameters[0].coeffWeightedVolume;
+        float coeffCSKernel = parameters[0].coeffCSKernel;
+
+        for(int z = -1; z <= 1; z++)
+        {
+            for(int y = -1; y <= 1; y++)
+            {
+                for(int x = -1; x <= 1; x++)
+                {
+                    int3 operand = {x, y, z};
+                    int3 neighborGridPos = currGridPos + operand;
+                    uint neighborHash = ComputeGridHash(neighborGridPos);
+                    Cell neighborCell = cells[neighborHash];
+
+                    if(neighborCell.begin != 0xffffffff)
+                    {
+                        for(uint j = neighborCell.begin; j < neighborCell.end; j++)
+                        {
+                            if(index != j)
+                            {
+                                float3 neighPos = pos_press[j].xyz;
+                                float4 neighTGRM = tgrm[index];
+                                int neighType = (int) neighTGRM.x;
+                                float3 diffPos = currPos - neighPos;
+                                float r = length(diffPos);
+
+                                if(neighType == 1 && r < 2 * h && r >= 0.0f)
+                                {
+                                    vol += coeffCSKernel * ComputeCubicSplineKernelVariable(r / h);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if(vol == 0.0f)
+        {
+            force_vol[index].w = currTgrm.w / parameters[0].restDensity;
+        } else
+        {
+            force_vol[index].w = 1.0f / vol;
+        }
+    }
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ComputeDensityPressureWCSPH(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+
+    if(index >= parameters[0].numParticles) return;
+
+    float3 currPos = pos_press[index].xyz;
+    float4 currTGRM = tgrm[index];
+    float currMass = currTGRM.w;
+    int3 currGridPos = ComputeGridPos(currPos);
+
+    // Constants
+    float h = parameters[0].smoothingLength;
+    float invH = parameters[0].invSmoothingLength;
+    float coeffCSKernel = parameters[0].coeffCSKernel;
+    float restDensity = parameters[0].restDensity;
+
+    // Results    
+    float density = 0.0f;
+    
+    for(int z = -1; z <= 1; z++)
+    {
+        for(int y = -1; y <= 1; y++)
+        {
+            for(int x = -1; x <= 1; x++)
+            {
+                int3 operand = {x, y, z};
+                int3 neighborGridPos = currGridPos + operand;
+                uint neighborHash = ComputeGridHash(neighborGridPos);
+                Cell neighborCell = cells[neighborHash];
+
+                if(neighborCell.begin != 0xffffffff)
+                {
+                    for(uint j = neighborCell.begin; j < neighborCell.end; j++)
+                    {
+                        if(index != j)
+                        {
+                            float3 neighborPos = pos_press[j];
+                            float4 neighborTGRM = tgrm[j];
+                            int neighborType = (int) neighborTGRM.x;
+                            float neighborWeightedVolume = force_vol[j].w;
+
+                            float3 diffPos = currPos - neighborPos;
+                            float r = length(diffPos);
+
+                            if(r >= 0.0f && r < 2.0f * h)
+                            {
+                                float densityKernel = coeffCSKernel * ComputeCubicSplineKernelVariable(r / h);
+                                if(neighborType == 0)
+                                {
+                                    density += densityKernel * currMass;
+                                } else 
+                                {
+                                    density += restDensity * neighborWeightedVolume * densityKernel;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    vel_rho[index].w = density;
+    float cS = 10.0f * parameters[0].velocityLimit;
+    float bI = restDensity * cS  * cS / 7.0f;
+    float powGamma = pow(abs(density / restDensity), 7.0f);
+    pos_press[index].w = max(0.0f, (powGamma - 1.0f)) * bI;
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ComputeForceWCSPH(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+
+    if(index >= parameters[0].numParticles) return;
+
+    float h = parameters[0].smoothingLength;
+    float invH = parameters[0].invSmoothingLength;
+    float coeffCSGradient = parameters[0].coeffCSGradient;
+
+    float restDensity = parameters[0].restDensity;
+    float artificialViscosity = parameters[0].artificialViscosity;
+
+    float4 currPosPress = pos_press[index];
+    float4 currVelRho = vel_rho[index];
+    float4 currTGRM = tgrm[index];
+    int currType = (int) currTGRM.x;
+    float currDensity = currVelRho.w;
+    float currInvDensity = 1.0f / currVelRho.w;
+    float currPressure = currPosPress.w;
+    int3 currGridPos = ComputeGridPos(currPosPress.xyz);
+
+    float cS = parameters[0].velocityLimit * 10.0f;
+    float timestep = parameters[0].timestep;
+
+    float4 prevForce = force_vol[index];
+    float4 halfVel = currVelRho + 0.5f * timestep * (prevForce / currTGRM.w);
+    halfVel.w = 0.0f;
+
+    // Results
+    float3 currForce = {0.0f, 0.0f, 0.0f};
+    if(currType == 0)
+    {
+        // i = fluid
+        for(int z = -1; z <= 1; z++)
+        {
+            for(int y = -1; y <= 1; y++)
+            {
+                for(int x = -1; x <= 1; x++)
+                {
+                    int3 operand = {x, y, z};
+                    int3 neighborGridPos = currGridPos + operand;
+                    uint neighborHash = ComputeGridHash(neighborGridPos);
+                    Cell neighborCell = cells[neighborHash];
+
+                    if(neighborCell.begin != 0xffffffff)
+                    {
+                        for(uint j = neighborCell.begin; j < neighborCell.end; j++)
+                        {
+                            if(index != j)
+                            {
+                                float4 neighborPosPress = pos_press[j];
+                                float4 neighborVelRho = vel_rho[j];
+                                float4 neighborTGRM = tgrm[j];
+                                int neighborType = (int) neighborTGRM.x;
+                                float neighborDensity = neighborVelRho.w;
+                                float neighborInvDensity = 1.0f / neighborVelRho.w;
+                                float neighborPressure = neighborPosPress.w;
+
+                                float3 diffPos = currPosPress.xyz - neighborPosPress.xyz;
+                                float3 diffVel = currVelRho.xyz - neighborVelRho.xyz;
+                                float r = length(diffPos);
+
+                                if(r >= 0.0f && r < 2.0f * h)
+                                {
+                                    if(neighborType == 0) // j = fluid
+                                    {
+                                        // Add pressure force
+                                        float3 kernelGrad = normalize(diffPos) * coeffCSGradient * ComputeCubicSplineGradientVariable(r / h);
+                                        float pressGrad = currPressure * currInvDensity * currInvDensity + neighborPressure * neighborInvDensity * neighborInvDensity;
+                                        currForce += (-1.0f * kernelGrad * pressGrad * currTGRM.w * neighborTGRM.w);
+
+                                        // Add viscosity force
+                                        float dotVP = max(dot(diffVel, diffPos), 0.0f);
+                                        float piIJ = -1.0f * (2.0f * artificialViscosity * h * cS / (currDensity + neighborDensity));
+                                        piIJ = piIJ * (dotVP / (r * r + 0.01 * h * h));
+                                        currForce += -1.0f * kernelGrad * piIJ * currTGRM.w * neighborTGRM.w;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // For fluid
+    force_vol[index] = float4(currForce, 0.0f);
+    force_vol[index] += float4(0.0f, -9.8f, 0.0f, 0.0f);
+    vel_verlet[index] = halfVel;
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void ComputeForceBoundary(uint3 dtid: SV_DispatchThreadID)
+{
+
+}
+
+[numthreads(BLOCK_SIZE, 1, 1)]
+void Integration(uint3 dtid: SV_DispatchThreadID)
+{
+    uint index = dtid.x;
+
+    if(index >= parameters[0].numParticles) return;
+
+    float timestep = parameters[0].timestep;
+    float h = parameters[0].smoothingLength;
+    float velLimit = parameters[0].velocityLimit;
+    float damping = 0.1f;
+
+    float4 sorted_pos_press = pos_press[index];
+    float4 sorted_vel_rho = vel_rho[index];
+    float4 sorted_force_vol = force_vol[index];
+    float4 sorted_tgrm = tgrm[index];
+    float4 sorted_vel_verlet = vel_verlet[index];
+    float curr_mass = sorted_tgrm.w;
+    float currRadius = sorted_tgrm.z;
+
+    int type = (int) sorted_tgrm.x;
+
+    float4 pos = sorted_pos_press;
+    float4 vel = sorted_vel_verlet;
+
+    if(type == 0)
+    {
+        pos = pos + (sorted_vel_verlet * timestep);
+        vel = vel + 0.5f * timestep * sorted_force_vol / sorted_vel_rho.w; 
+        if(length(vel) >= velLimit) vel = velLimit * normalize(vel);
+
+        float3 boxSize = parameters[0].boxSize;
+        if(parameters[0].enableBox > 0)
+        {
+            int collide = 0;
+            if(pos.x < -boxSize.x)
+            {
+                pos.x = -boxSize.x + currRadius;
+                collide += 1;
+            }
+            if(pos.x > boxSize.x)
+            {
+                pos.x = boxSize.x - currRadius;
+                collide += 1;
+            }
+            if(pos.y < -boxSize.y)
+            {
+                pos.y = -boxSize.y + currRadius;
+                collide += 1;
+            }
+            if(pos.z < -boxSize.z)
+            {
+                pos.z = -boxSize.z + currRadius;
+                collide += 1;
+            }
+            if(pos.z > boxSize.z)
+            {
+                pos.z = boxSize.z - currRadius;
+                collide += 1;
+            }
+            if(collide > 0) vel *= -damping;
+        }
+
+        for(int i = 0; i < parameters[0].numSphereColliders; i++)
+        {
+            SphereCollider col = sphere_colliders[i];
+            if(!IsOverlaped(pos, col.aabb, currRadius)) { continue; }
+
+            DistanceData dd = DistancePointSphere(pos, col.shape);
+
+            float penetration = dd.distance - currRadius;
+
+            if(penetration < 0.0f)
+            {
+                pos += float4(dd.direction * -penetration, 0.0f);
+                vel *= -damping;
+            }
+        }
+
+        for(int i = 0; i < parameters[0].numCapsuleColliders; i++)
+        {
+            CapsuleCollider col = capsule_colliders[i];
+            if(!IsOverlaped(pos, col.aabb, currRadius)) { continue; }
+
+            DistanceData dd = DistancePointCapsule(pos, col.shape);
+            float penetration = dd.distance - currRadius;
+            if(penetration < 0.0f)
+            {
+                pos += float4(dd.direction * -penetration, 0.0f);
+                vel *= -damping;
+            }
+        }
+
+        for(int i = 0; i < parameters[0].numBoxColliders; i++)
+        {
+            BoxCollider col = box_colliders[i];
+            if(!IsOverlaped(pos, col.aabb, currRadius)) { continue; }
+
+            DistanceData dd = DistancePointBox(pos, col.shape);
+            float penetration = dd.distance - currRadius;
+            if(penetration < 0.0f) 
+            {
+                pos += float4(dd.direction * -penetration, 0.0f);
+                vel *= -damping;
+            }
+        }
+    }
+
+    uint original_index = sort_data[index].index;
+    pos_press_dest[original_index] = pos;
+    vel_rho_dest[original_index] = vel;
+    force_vol_dest[original_index] = sorted_force_vol;
+}
