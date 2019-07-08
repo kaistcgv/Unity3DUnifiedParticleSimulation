@@ -191,7 +191,7 @@ void ComputeDensityPressureWCSPH(uint3 dtid: SV_DispatchThreadID)
                 {
                     for(uint j = neighborCell.begin; j < neighborCell.end; j++)
                     {
-                        if(index != j)
+                        if(true || index != j)
                         {
                             float3 neighborPos = pos_press[j];
                             float4 neighborTGRM = tgrm[j];
@@ -220,7 +220,7 @@ void ComputeDensityPressureWCSPH(uint3 dtid: SV_DispatchThreadID)
     }
 
     vel_rho[index].w = density;
-    float cS = 10.0f * parameters[0].velocityLimit;
+    float cS = 1.0f * parameters[0].velocityLimit;
     float bI = restDensity * cS  * cS / 2.0f;
     float powGamma = pow(abs(density / restDensity), 2.0f);
     pos_press[index].w = max(0.0f, (powGamma - 1.0f)) * bI;
