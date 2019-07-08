@@ -621,7 +621,7 @@ MonoBehaviour:
   radius: 0.1
   mass: 10
   simScript: {fileID: 455929918}
-  seconds: 0.1
+  seconds: 0.01
 --- !u!1 &1910569866
 GameObject:
   m_ObjectHideFlags: 0

@@ -27,12 +27,13 @@ public class ParticleEmitter : MonoBehaviour {
                 {
                     for(float k = -0.5f; k < 0.5f; k += spacing)
                     {
-                        simScript.AddParticle(transform.position + new Vector3(i, j , k), dir, new Vector3(0.0f, 0.0f, 0.0f), new Vector4(0.0f, -1.0f, radius, mass));
+                        Vector3 jitter = Random.insideUnitSphere * spacing * 0.1f;
+                        simScript.AddParticle(transform.position + new Vector3(i, j , k) + jitter, dir, new Vector3(0.0f, 0.0f, 0.0f), new Vector4(0.0f, -1.0f, radius, mass));
                     }
                 }
             }
             
-            yield return new WaitForSecondsRealtime(seconds);
+            yield return new WaitForSecondsRealtime(seconds * Time.fixedDeltaTime / simScript.timestep);
         }
     }
 }

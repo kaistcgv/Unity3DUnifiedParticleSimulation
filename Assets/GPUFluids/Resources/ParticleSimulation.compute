@@ -221,8 +221,8 @@ void ComputeDensityPressureWCSPH(uint3 dtid: SV_DispatchThreadID)
 
     vel_rho[index].w = density;
     float cS = 10.0f * parameters[0].velocityLimit;
-    float bI = restDensity * cS  * cS / 7.0f;
-    float powGamma = pow(abs(density / restDensity), 7.0f);
+    float bI = restDensity * cS  * cS / 2.0f;
+    float powGamma = pow(abs(density / restDensity), 2.0f);
     pos_press[index].w = max(0.0f, (powGamma - 1.0f)) * bI;
 }
 
@@ -316,7 +316,7 @@ void ComputeForceWCSPH(uint3 dtid: SV_DispatchThreadID)
 
     // For fluid
     force_vol[index] = float4(currForce, 0.0f);
-    force_vol[index] += float4(0.0f, -9.8f, 0.0f, 0.0f);
+    force_vol[index] += float4(0.0f, -9.8f, 0.0f, 0.0f) * currTGRM.w;
     vel_verlet[index] = halfVel;
 }
 
@@ -336,7 +336,7 @@ void Integration(uint3 dtid: SV_DispatchThreadID)
     float timestep = parameters[0].timestep;
     float h = parameters[0].smoothingLength;
     float velLimit = parameters[0].velocityLimit;
-    float damping = 0.1f;
+    float damping = 0.8f;
 
     float4 sorted_pos_press = pos_press[index];
     float4 sorted_vel_rho = vel_rho[index];
