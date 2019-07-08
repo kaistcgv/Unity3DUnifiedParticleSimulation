@@ -360,33 +360,17 @@ void Integration(uint3 dtid: SV_DispatchThreadID)
         float3 boxSize = parameters[0].boxSize;
         if(parameters[0].enableBox > 0)
         {
-            int collide = 0;
-            if(pos.x < -boxSize.x)
-            {
-                pos.x = -boxSize.x + currRadius;
-                collide += 1;
+            float3 p = pos.xyz;
+            float3 v = vel.xyz;
+            bool3 collide = p < -boxSize || p > boxSize;
+            p = 2 * clamp(p, -boxSize, boxSize) - p;
+            p = clamp(p, -boxSize, boxSize);
+            if (any(collide)) {
+                v *= damping * (1 - 2*(float3)collide);
             }
-            if(pos.x > boxSize.x)
-            {
-                pos.x = boxSize.x - currRadius;
-                collide += 1;
-            }
-            if(pos.y < -boxSize.y)
-            {
-                pos.y = -boxSize.y + currRadius;
-                collide += 1;
-            }
-            if(pos.z < -boxSize.z)
-            {
-                pos.z = -boxSize.z + currRadius;
-                collide += 1;
-            }
-            if(pos.z > boxSize.z)
-            {
-                pos.z = boxSize.z - currRadius;
-                collide += 1;
-            }
-            if(collide > 0) vel *= -damping;
+
+            pos.xyz = p;
+            vel.xyz = v;
         }
 
         for(int i = 0; i < parameters[0].numSphereColliders; i++)
@@ -401,7 +385,8 @@ void Integration(uint3 dtid: SV_DispatchThreadID)
             if(penetration < 0.0f)
             {
                 pos += float4(dd.direction * -penetration, 0.0f);
-                vel *= -damping;
+                vel.xyz = reflect(vel.xyz, dd.direction);
+                vel *= damping;
             }
         }
 
