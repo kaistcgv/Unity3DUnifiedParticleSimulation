@@ -223,7 +223,12 @@ void ComputeDensityPressureWCSPH(uint3 dtid: SV_DispatchThreadID)
         }
     }
 
-    vel_rho[index].w = density;
+    float3 bound = parameters[0].boxSize;
+    float3 distMin = max(0, currPos + bound);
+    float3 distMax = max(0, bound - currPos);
+    float3 dist = min(distMin, distMax);
+    float gamma = ComputeCubicSplineKernelGamma(dist / h);
+    vel_rho[index].w = density / gamma;
     float cS = 1.0f * parameters[0].velocityLimit;
     float bI = restDensity * cS  * cS / 2.0f;
     float powGamma = pow(abs(density / restDensity), 2.0f);

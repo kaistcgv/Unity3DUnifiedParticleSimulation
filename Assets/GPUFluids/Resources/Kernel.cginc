@@ -10,6 +10,21 @@ float ComputeCubicSplineKernelVariable(float q)
     return tmp * tmp * tmp;
 }
 
+float ComputeCubicSplineKernelGammaSingle(float q)
+{
+    if (q > 2) return 1;
+    if (q < 0) return 0.5;
+    return lerp(0.5, 1, q/2);
+}
+
+float ComputeCubicSplineKernelGamma(float3 q)
+{
+    float gammaX = ComputeCubicSplineKernelGammaSingle(q.x);
+    float gammaY = ComputeCubicSplineKernelGammaSingle(q.y);
+    float gammaZ = ComputeCubicSplineKernelGammaSingle(q.z);
+    return gammaX * gammaY * gammaZ;
+}
+
 float ComputeCubicSplineGradientVariable(float q)
 {
     if(q < 0 || q >= 2) return 0;
