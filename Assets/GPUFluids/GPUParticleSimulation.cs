@@ -20,6 +20,7 @@ public class GPUParticleSimulation : MonoBehaviour
     public float restDensity = 1000.0f;
     public float artificialViscosity = 1.0f;
     public float velocityLimit = 20.0f;
+    public Vector3 gravity;
     private int numParticles = 0;
 
     [Header("Grid Information")]
@@ -338,6 +339,7 @@ public class GPUParticleSimulation : MonoBehaviour
         simulationShader.Dispatch(kComputeDensityPressureWCSPH, numBlocks, 1, 1);
 
         // Solve Navier-Stokes
+        simulationShader.SetVector("gravity", gravity);
         simulationShader.SetBuffer(kComputeForceWCSPH, "parameters", bufSimulationParameters);
         simulationShader.SetBuffer(kComputeForceWCSPH, "cells", bufCells);
         simulationShader.SetBuffer(kComputeForceWCSPH, "pos_press", bufPosPress[1]);

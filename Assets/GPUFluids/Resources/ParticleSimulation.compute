@@ -46,6 +46,10 @@ StructuredBuffer<Cell> cells;
 // Additional elements
 int num_additional_particles;
 
+cbuffer Consts {
+    float3 gravity;
+};
+
 int3 ComputeGridPos(float3 p)
 {
     int3 gridPos;
@@ -316,7 +320,7 @@ void ComputeForceWCSPH(uint3 dtid: SV_DispatchThreadID)
 
     // For fluid
     force_vol[index] = float4(currForce, 0.0f);
-    force_vol[index] += float4(0.0f, -9.8f, 0.0f, 0.0f) * currTGRM.w;
+    force_vol[index] += float4(gravity, 0.0f) * currTGRM.w;
     vel_verlet[index] = halfVel;
 }
 

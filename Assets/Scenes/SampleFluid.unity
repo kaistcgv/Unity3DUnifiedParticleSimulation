@@ -224,11 +224,12 @@ MonoBehaviour:
   restDensity: 1000
   artificialViscosity: 0.1
   velocityLimit: 9.8
+  gravity: {x: 0, y: -9.81, z: 0}
   worldOrigin: {x: 0, y: 0, z: 0}
   maxSphereColliders: 256
   maxCapsuleColliders: 256
   maxBoxColliders: 256
-  boxSize: {x: 3, y: 5, z: 3}
+  boxSize: {x: 5, y: 5, z: 5}
   useBox: 1
   simulationShader: {fileID: 7200000, guid: cee2e0776088da94a9f15e24dfd414f5, type: 3}
   computeGridShader: {fileID: 7200000, guid: 9459a25e0c9121340ae860c50312873f, type: 3}
