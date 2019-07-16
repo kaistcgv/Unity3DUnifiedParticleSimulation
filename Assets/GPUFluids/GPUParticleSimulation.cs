@@ -13,6 +13,7 @@ public class GPUParticleSimulation : MonoBehaviour
     static List<GPUParticleSimulation> sInstances;
 
     [Header("SPH Parameters")]
+    public int iterations = 10;
     public float timestep = 0.05f;
     public int maxParticles = 100000;
     public float smoothingLength = 0.228f;
@@ -373,7 +374,7 @@ public class GPUParticleSimulation : MonoBehaviour
         return (a % b != 0) ? (a / b + 1) : (a / b);
     }
 
-    void Update()
+    void Step()
     {
         ProcessColliders();
 
@@ -388,6 +389,14 @@ public class GPUParticleSimulation : MonoBehaviour
         {
             ComputeGridHash();
             ComputeWCSPH();
+        }
+    }
+
+    private void FixedUpdate() {
+        float dt = Time.fixedDeltaTime / iterations;
+        timestep = dt;
+        for (int i = 0; i < iterations; i++) {
+            Step();
         }
     }
 }
