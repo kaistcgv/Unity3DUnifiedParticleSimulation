@@ -6,7 +6,7 @@ float ComputeCubicSplineKernelVariable(float q)
     if(q < 0 || q >= 2) return 0;
     float tmp = 2.0f - q;
     float tmp2 = 1.0f - q;
-    if(q < 1) return 2.0f * tmp * tmp * tmp - 4.0f * tmp2 * tmp2 * tmp2;
+    if(q < 1) return tmp * tmp * tmp - 4.0f * tmp2 * tmp2 * tmp2;
     return tmp * tmp * tmp;
 }
 

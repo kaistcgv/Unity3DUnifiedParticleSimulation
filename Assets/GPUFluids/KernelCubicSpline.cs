@@ -17,7 +17,7 @@ namespace GPUKernel
             if(q < 0 || q >= 2) return 0;
             float tmp = 2.0f - q;
             float tmp2 = 1.0f - q;
-            if(q < 1) return 2.0f * Mathf.Pow(tmp, 3) - 4.0f * Mathf.Pow(tmp2, 3);
+            if(q < 1) return Mathf.Pow(tmp, 3) - 4.0f * Mathf.Pow(tmp2, 3);
             return Mathf.Pow(tmp, 3);
 		}
 
